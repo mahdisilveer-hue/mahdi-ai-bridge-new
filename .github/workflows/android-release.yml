@@ -15,21 +15,57 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # 1. دریافت کدهای مخزن
+      # 1. دریافت سورس Repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. خارج کردن پروژه Android از ZIP
-      - name: Extract Android project
+      # 2. بررسی ZIP پروژه
+      - name: Verify Android project archive
+        shell: bash
         run: |
-          unzip -o MahdiAIBridge-Pro.zip
-          test -f MahdiAIBridge-Pro/settings.gradle.kts
-          test -f MahdiAIBridge-Pro/app/build.gradle.kts
-          echo "Android project detected successfully."
-          ls -la MahdiAIBridge-Pro
+          set -euo pipefail
 
-      # 3. نصب Java 17
+          if [ ! -f "MahdiAIBridge-Pro.zip" ]; then
+            echo "::error::MahdiAIBridge-Pro.zip not found in repository root."
+            exit 1
+          fi
+
+          echo "ZIP file found:"
+          ls -lh "MahdiAIBridge-Pro.zip"
+
+      # 3. استخراج پروژه Android
+      - name: Extract Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf MahdiAIBridge-Pro
+
+          unzip -q -o "MahdiAIBridge-Pro.zip"
+
+          if [ ! -d "MahdiAIBridge-Pro" ]; then
+            echo "::error::MahdiAIBridge-Pro directory was not created."
+            echo "Extracted files:"
+            find . -maxdepth 2 -type f | sort
+            exit 1
+          fi
+
+          if [ ! -f "MahdiAIBridge-Pro/settings.gradle.kts" ]; then
+            echo "::error::settings.gradle.kts not found."
+            exit 1
+          fi
+
+          if [ ! -f "MahdiAIBridge-Pro/app/build.gradle.kts" ]; then
+            echo "::error::app/build.gradle.kts not found."
+            exit 1
+          fi
+
+          echo "Android project detected successfully."
+          echo
+          echo "Project structure:"
+          find "MahdiAIBridge-Pro" -maxdepth 2 -type f | sort
+
+      # 4. نصب Java 17
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -37,46 +73,134 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # 4. نصب Android SDK و قرار دادن sdkmanager در PATH
+      # 5. نصب Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools'
 
-      # 5. نصب Android SDK مورد نیاز پروژه
+      # 6. نصب SDK مورد نیاز
       - name: Install Android SDK packages
+        shell: bash
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          set -euo pipefail
+
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo
+          echo "Installed Android SDK packages:"
           sdkmanager --list_installed
 
-      # 6. نصب Gradle
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
+      # 7. بررسی Gradle Wrapper
+      - name: Prepare Gradle Wrapper
+        working-directory: MahdiAIBridge-Pro
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      # 7. بررسی Gradle و ساخت APK
+          if [ ! -f "gradlew" ]; then
+            echo "::error::gradlew was not found in the Android project."
+            echo
+            echo "The ZIP must contain the Gradle Wrapper."
+            echo "Expected files:"
+            echo "  MahdiAIBridge-Pro/gradlew"
+            echo "  MahdiAIBridge-Pro/gradle/wrapper/gradle-wrapper.properties"
+            echo "  MahdiAIBridge-Pro/gradle/wrapper/gradle-wrapper.jar"
+            exit 1
+          fi
+
+          if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "::error::gradle-wrapper.properties was not found."
+            exit 1
+          fi
+
+          chmod +x gradlew
+
+          echo "Gradle Wrapper detected successfully."
+          ./gradlew --version
+
+      # 8. پاک‌سازی پروژه
+      - name: Clean project
+        working-directory: MahdiAIBridge-Pro
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon clean
+
+      # 9. ساخت APK Release
       - name: Build Release APK
         working-directory: MahdiAIBridge-Pro
+        shell: bash
         run: |
-          gradle --version
-          gradle --no-daemon --stacktrace assembleRelease
+          set -euo pipefail
 
-      # 8. بررسی اینکه APK واقعاً ساخته شده
+          echo "Starting Release APK build..."
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all \
+            assembleRelease
+
+      # 10. پیدا کردن و بررسی APK
       - name: Verify APK
         working-directory: MahdiAIBridge-Pro
+        shell: bash
         run: |
-          echo "Searching for generated APK..."
-          find app/build/outputs/apk/release -type f -name "*.apk" -print
-          test -n "$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
-          echo "APK generated successfully."
+          set -euo pipefail
 
-      # 9. آپلود APK به عنوان Artifact
+          echo "Searching for generated APK files..."
+
+          find app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          APK_COUNT=$(find app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            | wc -l)
+
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "::error::No APK was generated."
+            exit 1
+          fi
+
+          echo
+          echo "APK generated successfully."
+          echo "Number of APK files: $APK_COUNT"
+
+      # 11. تغییر نام APK برای خروجی تمیز
+      - name: Prepare APK artifact
+        working-directory: MahdiAIBridge-Pro
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release
+
+          APK=$(find app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "::error::APK file not found."
+            exit 1
+          fi
+
+          cp "$APK" "release/Mahdi-AI-Bridge-Release.apk"
+
+          echo "Final APK:"
+          ls -lh release/Mahdi-AI-Bridge-Release.apk
+
+      # 12. آپلود APK
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: Mahdi-AI-Bridge-Release
-          path: MahdiAIBridge-Pro/app/build/outputs/apk/release/*.apk
+          path: MahdiAIBridge-Pro/release/Mahdi-AI-Bridge-Release.apk
           if-no-files-found: error
           retention-days: 30
