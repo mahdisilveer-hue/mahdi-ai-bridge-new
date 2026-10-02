@@ -3,8 +3,7 @@ name: Build Mahdi AI Bridge APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 permissions:
   contents: read
@@ -20,6 +19,7 @@ jobs:
       - name: Extract project ZIP
         run: |
           unzip -o MahdiAIBridge-Pro.zip
+          test -f MahdiAIBridge-Pro/settings.gradle.kts
           ls -la MahdiAIBridge-Pro
 
       - name: Setup Java 17
@@ -28,12 +28,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK
+      - name: Install Android SDK packages
         run: |
-          yes | sdkmanager --licenses || true
+          yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle
@@ -43,8 +40,7 @@ jobs:
 
       - name: Build Release APK
         working-directory: MahdiAIBridge-Pro
-        run: |
-          gradle --no-daemon assembleRelease
+        run: gradle --no-daemon assembleRelease
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
